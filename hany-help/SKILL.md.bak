@@ -1,0 +1,354 @@
+---
+name: hany-help
+description: 根据用户需求智能推荐技能并显示执行管道，然后让用户选择执行
+author: hany
+version: "4.0"
+level: meta
+tags:
+  - skill-recommendation
+  - workflow
+next-skill:
+  - find-skills
+  - hany-require
+  - brainstorming
+config:
+  max_results: 5
+  min_score_threshold: 40
+  scan_limit: 100
+---
+
+# hany-help - 智能技能推荐助手
+
+> **v4.0** | 精准推荐 → 简洁输出 → 可靠执行
+
+## 执行流程
+
+```
+┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐
+│ Step 0  │───▶│ Step 1  │───▶│ Step 2  │───▶│ Step 3  │───▶│ Step 4  │
+│ 解析需求│    │ 扫描技能│    │ 评分排序│    │ 生成管道│    │ 用户选择│
+└─────────┘    └─────────┘    └─────────┘    └─────────┘    └─────────┘
+                                                            │
+                           ┌────────────────────────────────┘
+                           ▼
+                    ┌─────────────┐
+                    │   执行技能  │
+                    └─────────────┘
+```
+
+| 步骤 | 行号 | 动作 | 关键检查 |
+|------|------|------|---------|
+| 0 | ~50 | 解析需求 | 从参数/历史/提问获取 |
+| 1 | ~70 | 扫描技能 | 只扫描一次，后续复用 |
+| 2 | ~120 | 评分排序 | 关键词+意图+领域+质量 |
+| 3 | ~175 | 生成管道 | 基于元数据智能生成 |
+| 4 | ~200 | 用户选择 | AskUserQuestion |
+| 5 | ~230 | 执行技能 | Skill() 调用 |
+
+---
+
+## Step 0：解析需求 [10%]
+
+### 需求获取（优先级）
+
+1. **显式参数**：`/hany:help [需求]` → 直接使用
+2. **对话历史**：提取最近的 user_input 关键需求
+3. **主动提问**：使用 `AskUserQuestion` 询问
+
+### 需求结构
+
+```yaml
+需求结构:
+  raw_text: 原始文本
+  intent_type: create | optimize | debug | plan | explore | analyze | generate
+  domain: frontend | backend | test | design | plan | debug | optimize | doc
+  confidence: high (>15字符) | medium (5-15) | low (<5或模糊)
+  keywords: 关键词列表
+```
+
+### 意图识别表
+
+| 意图 | 关键词 | 推荐第一技能 |
+|------|-------|------------|
+| create | 创建, 新建, 写, make | brainstorming |
+| optimize | 优化, 改进, enhance | code-quality-audit |
+| debug | 调试, 修复, fix, bug | systematic-debugging |
+| plan | 规划, 计划, 安排 | writing-plans |
+| explore | 找, 搜索, 不知道 | find-skills |
+| analyze | 分析, 研究, understand | consulting-analysis |
+| generate | 生成, 制作, produce | 对应领域 generator |
+
+> **模糊需求** → 置信度 low → 自动推荐 `hany-deep`
+
+---
+
+## Step 1：扫描技能 [25%]
+
+> ⚠️ **只扫描一次**
+
+### 扫描路径
+
+```
+$C:\Users\{user}\.trae-cn\skills\**\SKILL.md
+$工作目录\**\SKILL.md
+```
+
+### 提取字段
+
+```yaml
+技能:
+  name: String       # frontmatter.name
+  path: String       # 文件路径
+  description: String
+  content: String    # 前 500 字符
+  keywords: Array    # 提取的关键词
+  quality: Number    # 0-20 质量分
+```
+
+### 质量评分规则
+
+| 元数据 | 分值 |
+|--------|------|
+| pipeline | +5 |
+| next-skill | +5 |
+| level | +3 |
+| description > 100 字符 | +4 |
+| Use_When 存在 | +3 |
+
+---
+
+## Step 2：评分排序 [40%]
+
+### 评分公式
+
+```
+总分 = 关键词匹配(40) + 意图匹配(30) + 领域匹配(30) + 质量分(0-20)
+```
+
+### 关键词匹配（40 分）
+
+```python
+def keyword_score(需求关键词, 技能关键词列表):
+    得分 = sum(权重 for 关键词 in 技能关键词列表 if 关键词 in 需求关键词)
+    return min(得分 * 40 / 最大可能得分, 40)
+```
+
+### 意图匹配（30 分）
+
+| 匹配程度 | 得分 |
+|--------|------|
+| 完全匹配 | 30 |
+| 部分匹配 | 20 |
+| 无匹配 | 10 |
+
+### 领域匹配（30 分）
+
+| 领域 | 关键词 | 匹配技能 |
+|------|--------|---------|
+| frontend | react, vue, css, ui | frontend-skill, shadcn, premium-frontend-ui |
+| backend | api, database, server | python-web-dev, mcp-builder |
+| test | test, jest, playwright | test-driven-development |
+| design | design, ui/ux | brainstorming, huashu-design |
+| plan | plan, 规划 | writing-plans, spec-to-implementation |
+| debug | debug, bug, fix | systematic-debugging |
+| optimize | optimize, 优化 | code-quality-audit, performance-optimization |
+| doc | docs, readme | doc-coauthoring |
+
+### 评分分级
+
+| 分数 | 评级 | 标记 |
+|------|------|------|
+| 80-100 | 强烈推荐 | 🎯 |
+| 60-79 | 推荐 | ⭐ |
+| 40-59 | 一般 | 👍 |
+| 0-39 | 不推荐 | - |
+
+---
+
+## Step 3：生成管道 [55%]
+
+### 管道生成优先级
+
+1. 技能自身 `pipeline` 字段
+2. `next-skill` 字段
+3. 常识推断（基于意图和领域）
+
+### 常用管道模板
+
+| 场景 | 管道 |
+|------|------|
+| 需求模糊 | `hany-deep → brainstorming → writing-plans` |
+| 有想法 | `brainstorming → writing-plans` |
+| 已有计划 | `writing-plans → executing-plans` |
+| 调试修复 | `systematic-debugging → test-driven-development` |
+| 探索技能 | `find-skills → 其他技能` |
+| 前端实现 | `brainstorming → writing-plans → premium-frontend-ui` |
+
+---
+
+## Step 4：用户选择 [75%]
+
+### 输出格式
+
+```
+════════════════════════════════════════
+需求：{需求文本}
+
+推荐技能：
+1. [🎯] {技能名} - {描述}
+   匹配度：{分数} | 质量：高
+2. [⭐] {技能名} - {描述}
+   匹配度：{分数} | 质量：中
+
+推荐管道：{skill1} → {skill2} → {skill3}
+════════════════════════════════════════
+```
+
+### 选择菜单
+
+```yaml
+选项:
+  - label: "{技能名}"
+    description: "{描述}"
+  - label: "查看全部可用技能"
+    description: "显示完整列表"
+  - label: "搜索新技能"
+    description: "使用 find-skills"
+```
+
+---
+
+## Step 5：执行技能 [90%]
+
+### 单选处理
+
+1. 确认选择 → `✅ 已选择：{技能名}`
+2. 调用技能 → `Skill("{技能名}")`
+3. 传递需求 → 原始需求作为参数
+
+### 多选处理
+
+```
+⏭️ {技能1} 已完成
+   继续执行 {技能2} 吗？
+```
+
+### 取消处理
+
+```
+⏹️ 已取消
+   需要重新推荐吗？
+```
+
+---
+
+## 边界情况处理
+
+| 情况 | 处理方式 |
+|------|---------|
+| 技能 < 3 个 | 显示全部 |
+| 技能 > 10 个 | 显示 Top 5 |
+| 最高分 < 40 | 显示全部 + 建议 find-skills |
+| 解析失败 | 跳过 + 记录警告 |
+
+---
+
+## 自检清单
+
+执行前检查：
+
+- [ ] 需求已明确（≥5 字符或已提问确认）
+- [ ] 扫描只执行一次
+- [ ] 评分计算正确
+- [ ] 管道逻辑合理
+- [ ] 输出格式统一
+- [ ] 用户选择已确认
+
+---
+
+## 调试模式
+
+### 启用方式
+
+```
+/hany:help [需求] debug=true
+```
+
+### 调试输出示例
+
+```
+[DEBUG] Step 0: 解析需求
+  原始需求: "React组件"
+  意图: create | 领域: frontend | 置信度: high
+
+[DEBUG] Step 1: 扫描技能
+  路径: C:\Users\hany\.trae-cn\skills\**\SKILL.md
+  找到: 45 个 | 解析失败: 2 个
+
+[DEBUG] Step 2: 评分
+  brainstorming: 85 (关键词:20 + 意图:30 + 领域:30 + 质量:5)
+  writing-plans: 70
+```
+
+---
+
+## 常见问题
+
+### Q1: 推荐的技能不准确？
+
+检查：description 是否清晰、level/tags 元数据是否添加、评分权重是否需要调整
+
+### Q2: 如何让自定义技能被优先推荐？
+
+在 SKILL.md 添加：
+```yaml
+---
+name: my-skill
+description: 清晰描述技能功能
+level: frontend
+tags: [react, component]
+---
+```
+
+### Q3: 扫描不到技能？
+
+检查：SKILL.md 是否存在、路径是否正确、frontmatter 是否有效
+
+---
+
+## 元数据规范
+
+### 推荐添加的元数据
+
+```yaml
+---
+name: skill-name
+description: 简洁描述（50-200 字符）
+author: 作者
+version: "1.0"
+level: frontend  # frontend/backend/meta/general
+tags: [react, component]  # 关键词标签
+pipeline: [step1, step2]  # 执行步骤
+next-skill: [other-skill]  # 后续技能
+---
+```
+
+### 级别说明
+
+| level | 适用场景 |
+|-------|---------|
+| frontend | 前端开发、UI、样式 |
+| backend | 后端开发、API、数据库 |
+| meta | 元技能（技能推荐、规划） |
+| general | 通用场景 |
+
+---
+
+## 版本历史
+
+| 版本 | 更新内容 |
+|------|---------|
+| v4.0 | 精简内容、完善细节、增强逻辑、规范格式 |
+| v3.0 | 模块化设计、调试支持、自检清单 |
+| v2.0 | 进度指示、Mermaid 图、增强评分 |
+| v1.0 | 初始版本 |

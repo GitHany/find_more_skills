@@ -1,0 +1,219 @@
+---
+name: hany-help
+description: 根据用户需求智能推荐技能并显示执行管道，然后让用户选择执行
+author: hany
+version: "5.0"
+level: meta
+tags: [skill-recommendation, workflow]
+next-skill: [find-skills, hany-require, brainstorming]
+---
+
+# hany-help - 智能技能推荐助手
+
+> **v5.0** | 精准推荐 → 简洁输出 → 可靠执行
+
+## 流程
+
+```
+解析需求 → 扫描技能 → 评分排序 → 生成管道 → 用户选择 → 执行技能
+```
+
+| 步骤 | 动作 |
+|------|------|
+| 0 | 解析需求：意图、领域、关键词 |
+| 1 | 扫描技能：提取元数据 |
+| 2 | 评分排序：计算总分 |
+| 3 | 生成管道：推荐执行路径 |
+| 4 | 用户选择：AskUserQuestion |
+| 5 | 执行技能：Skill() |
+
+---
+
+## Step 0：解析需求
+
+### 需求结构
+
+```yaml
+intent_type: create | optimize | debug | plan | explore | analyze | generate
+domain: frontend | backend | test | design | plan | debug | optimize | doc
+confidence: high (>15) | medium (5-15) | low (<5)
+keywords: [关键词列表]
+```
+
+### 意图识别
+
+| 意图 | 关键词 | 推荐技能 |
+|------|-------|---------|
+| create | 创建, 新建, 写 | brainstorming |
+| optimize | 优化, 改进 | code-quality-audit |
+| debug | 调试, 修复, fix | systematic-debugging |
+| plan | 规划, 计划 | writing-plans |
+| explore | 找, 搜索 | find-skills |
+| analyze | 分析, 研究 | consulting-analysis |
+
+> 模糊需求 → 推荐 `hany-deep`
+
+## Step 1：扫描技能
+
+### 扫描路径
+
+- `$用户目录\.trae-cn\skills\**\SKILL.md`
+- `$工作目录\**\SKILL.md`
+
+```yaml
+name: frontmatter.name
+path: 文件路径
+description: 描述（>100字符 +4分）
+keywords: 提取的关键词
+quality: 0-20分
+```
+
+### 质量分
+
+| 元数据 | 分值 |
+|--------|------|
+| pipeline | +5 |
+| next-skill | +5 |
+| level | +3 |
+| description > 100字符 | +4 |
+
+---
+
+## Step 2：评分排序
+
+### 评分公式
+
+```
+总分 = 关键词匹配(40) + 意图匹配(30) + 领域匹配(30) + 质量分(0-20)
+```
+
+### 匹配得分
+
+| 匹配程度 | 意图 | 领域 |
+|---------|------|------|
+| 完全匹配 | 30 | 30 |
+| 部分匹配 | 20 | 20 |
+| 无匹配 | 10 | 10 |
+
+### 评分分级
+
+| 分数 | 评级 |
+|------|------|
+| 80-100 | 🎯 强烈推荐 |
+| 60-79 | ⭐ 推荐 |
+| 40-59 | 👍 一般 |
+| 0-39 | - 不推荐 |
+
+---
+
+## Step 3：生成管道
+
+### 常用管道
+
+| 场景 | 管道 |
+|------|------|
+| 需求模糊 | `hany-deep → brainstorming → writing-plans` |
+| 有想法 | `brainstorming → writing-plans` |
+| 已有计划 | `writing-plans → executing-plans` |
+| 调试修复 | `systematic-debugging → test-driven-development` |
+| 前端实现 | `brainstorming → writing-plans → premium-frontend-ui` |
+
+---
+
+## Step 4：用户选择
+
+### 输出格式
+
+```
+════════════════════════════════════════
+需求：{需求文本}
+
+推荐技能：
+1. [🎯] {技能名} - {描述}
+2. [⭐] {技能名} - {描述}
+
+推荐管道：{skill1} → {skill2} → {skill3}
+════════════════════════════════════════
+```
+
+### 选择菜单
+
+```yaml
+- label: "{技能名}"
+- label: "查看全部可用技能"
+- label: "搜索新技能"
+```
+
+---
+
+## Step 5：执行技能
+
+```python
+1. 确认选择 → "✅ 已选择：{技能名}"
+2. 调用技能 → Skill("{技能名}")
+3. 传递需求 → 原始需求作为参数
+```
+
+---
+
+## 边界情况
+
+| 情况 | 处理 |
+|------|------|
+| 技能 < 3 | 显示全部 |
+| 技能 > 10 | 显示 Top 5 |
+| 最高分 < 40 | 全部 + 建议 find-skills |
+
+---
+
+## 自检清单
+
+- [ ] 需求已明确（≥5字符）
+- [ ] 扫描只执行一次
+- [ ] 评分计算正确
+- [ ] 管道逻辑合理
+- [ ] 用户选择已确认
+
+---
+
+## 调试模式
+
+启用：`/hany:help [需求] debug=true`
+
+---
+
+## FAQ
+
+**Q1: 推荐的技能不准确？**
+→ 检查：description 是否清晰、level/tags 元数据是否添加
+
+**Q2: 如何让自定义技能被优先推荐？**
+→ 在 SKILL.md 添加：
+```yaml
+---
+name: my-skill
+description: 清晰描述
+level: frontend
+tags: [关键词]
+---
+```
+
+**Q3: 扫描不到技能？**
+→ 检查：SKILL.md 是否存在、路径是否正确、frontmatter 是否有效
+
+---
+
+## 元数据
+
+```yaml
+---
+name: skill-name
+description: 简洁描述（50-200字符）
+author: 作者
+version: "1.0"
+level: frontend  # frontend/backend/meta/general
+tags: [关键词]
+pipeline: [step1, step2]
+next-skill: [other-skill]
+---
+```
